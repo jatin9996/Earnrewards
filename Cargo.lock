@@ -979,6 +979,7 @@ name = "rewards-program"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "rand 0.8.5",
 ]
 
 [[package]]
