@@ -75,6 +75,11 @@ fn start_task_availability_update() {
 // Call this function to start the periodic task availability update
 // start_task_availability_update();
 
+// Function to handle user cooldown
+fn user_cooldown() {
+    thread::sleep(Duration::from_secs(5)); // 5 seconds cooldown
+}
+
 #[program]
 pub mod rewards_program {
     use super::*;
@@ -92,8 +97,26 @@ pub mod rewards_program {
         let reward_history = &mut ctx.accounts.reward_history;
         reward_history.user = user;
         reward_history.activity = activity.clone();
-        reward_history.reward_amount = calculate_reward_amount(&activity, num_tasks, num_users);
-        reward_history.rewards = vec![];
+        
+        // Check for consecutive task selection
+        if reward_history.last_activity == activity {
+            reward_history.consecutive_count += 1;
+        } else {
+            reward_history.consecutive_count = 1;
+        }
+        reward_history.last_activity = activity;
+
+        // Apply anti-farming reward reduction
+        let mut reward_amount = calculate_reward_amount(&activity, num_tasks, num_users);
+        if reward_history.consecutive_count >= 3 {
+            reward_amount /= 2u64.pow((reward_history.consecutive_count - 2) as u32);
+        }
+        reward_history.reward_amount = reward_amount;
+        reward_history.rewards.push(reward_amount);
+
+        // Apply user cooldown
+        user_cooldown();
+
         Ok(())
     }
 }
@@ -103,13 +126,14 @@ pub struct Initialize {}
 
 #[derive(Accounts)]
 pub struct InitializeRewardHistory<'info> {
-    #[account(init, payer = user, space = 8 + 32 + 4 + 100 * 8)]
+    #[account(init, payer = user, space = 8 + 32 + 4 + 100 * 8 + 4 + 100 + 4 + 100)]
     pub reward_history: Account<'info, RewardHistory>,
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 #[account]
 pub struct RewardHistory {
     pub user: Pubkey,
@@ -117,4 +141,6 @@ pub struct RewardHistory {
     pub reward_amount: u64,
     pub rewards: Vec<u64>,
     pub timestamp: i64,
+    pub last_activity: String,
+    pub consecutive_count: u64,
 }
