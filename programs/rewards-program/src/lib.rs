@@ -49,10 +49,12 @@ fn calculate_reward_amount(activity: &str, num_tasks: u64, num_users: u64) -> u6
     (base_reward * multiplier * 100.0) as u64 // Convert SOL to lamports
 }
 
-// Function to determine task availability using RNG
+// Function to determine task availability using a deterministic approach
 fn determine_task_availability() -> bool {
-    let mut rng = rand::thread_rng();
-    rng.gen_bool(0.5) // 50% chance of being available
+    let clock = Clock::get().unwrap();
+    let timestamp = clock.unix_timestamp;
+    // Use timestamp to generate a deterministic but seemingly random result
+    (timestamp % 2) == 0
 }
 
 // Function to periodically update task availability
@@ -95,6 +97,13 @@ pub mod rewards_program {
             return Err(ProgramError::InvalidArgument.into());
         }
         let reward_history = &mut ctx.accounts.reward_history;
+        let current_time = Clock::get()?.unix_timestamp;
+
+        // Check cooldown period
+        if current_time - reward_history.last_completion_time < 5 {
+            return Err(ProgramError::InvalidArgument.into());
+        }
+
         reward_history.user = user;
         reward_history.activity = activity.clone();
         
@@ -109,13 +118,14 @@ pub mod rewards_program {
         // Apply anti-farming reward reduction
         let mut reward_amount = calculate_reward_amount(&activity, num_tasks, num_users);
         if reward_history.consecutive_count >= 3 {
-            reward_amount /= 2u64.pow((reward_history.consecutive_count - 2) as u32);
+            // Apply progressive reduction: 50% on 3rd time, 75% on 4th, 87.5% on 5th, etc.
+            let reduction_factor = 2u64.pow((reward_history.consecutive_count - 2) as u32);
+            reward_amount = reward_amount / reduction_factor;
         }
+        
         reward_history.reward_amount = reward_amount;
         reward_history.rewards.push(reward_amount);
-
-        // Apply user cooldown
-        user_cooldown();
+        reward_history.last_completion_time = current_time;
 
         Ok(())
     }
@@ -126,14 +136,13 @@ pub struct Initialize {}
 
 #[derive(Accounts)]
 pub struct InitializeRewardHistory<'info> {
-    #[account(init, payer = user, space = 8 + 32 + 4 + 100 * 8 + 4 + 100 + 4 + 100)]
+    #[account(init, payer = user, space = 8 + 32 + 4 + 100 * 8 + 4 + 100 + 4 + 100 + 8)]
     pub reward_history: Account<'info, RewardHistory>,
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 #[account]
 pub struct RewardHistory {
     pub user: Pubkey,
@@ -143,4 +152,5 @@ pub struct RewardHistory {
     pub timestamp: i64,
     pub last_activity: String,
     pub consecutive_count: u64,
+    pub last_completion_time: i64,  // Track when the last task was completed
 }
